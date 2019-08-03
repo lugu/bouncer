@@ -25,6 +25,9 @@ func TestFireWall(t *testing.T) {
 	externalUser := "public"
 	externalToken := "public"
 
+	log.Printf("internal: %s", internalURL)
+	log.Printf("external: %s", externalURL)
+
 	passwords := map[string]string{
 		internalUser: internalToken,
 	}
@@ -43,6 +46,7 @@ func TestFireWall(t *testing.T) {
 	defer firewall.Terminate()
 
 	internalA := util.NewUnixAddr()
+	log.Printf("internal A: %s", internalA)
 	internalServiceA, err := NewService(internalURL, internalA,
 		"A", internalUser, internalToken)
 	if err != nil {
@@ -55,12 +59,10 @@ func TestFireWall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Skip("watcher not yet implemented")
-
 	// test connection to A through the firewall
 	err = NewClient(externalURL, "A", externalUser, externalToken)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
 
 	select {
@@ -70,6 +72,7 @@ func TestFireWall(t *testing.T) {
 		t.Fatal(err)
 	case err = <-internalServiceA.WaitTerminate():
 		t.Fatal(err)
+	default:
 	}
 }
 
