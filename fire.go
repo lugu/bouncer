@@ -4,10 +4,7 @@
 // Limitations:
 // 	- does not forward the capability map
 // 	- authentication not based on PAM
-// 	- service id do not match
-//	- update machine id and process in info struct
 //	- does not handle service info updates
-//	- inefficient
 //
 // Missing in qiloop:
 //	- SD shall unregister the service on disconnection
@@ -53,8 +50,9 @@ type connection struct {
 func newConnection(ghost *ghostService, stream net.Stream,
 	errors chan error, terminate chan struct{}) (*connection, error) {
 
-	endpoint, err := bus.SelectEndPoint(ghost.info.Endpoints,
-		ghost.user, ghost.token)
+	endpoint, err := net.DialEndPoint(ghost.info.Endpoints[0])
+	// endpoint, err := bus.SelectEndPoint(ghost.info.Endpoints,
+	// 	ghost.user, ghost.token)
 	if err != nil {
 		return nil, fmt.Errorf("ghost (%s): %s", ghost.info.Name, err)
 	}
@@ -88,7 +86,6 @@ func newConnection(ghost *ghostService, stream net.Stream,
 }
 
 type ghostService struct {
-	session   bus.Session
 	info      services.ServiceInfo
 	directory services.ServiceDirectoryProxy
 	listen    net.Listener
@@ -105,17 +102,11 @@ func (g *ghostService) handle(stream net.Stream,
 	}
 }
 
-func (g *ghostService) stoppedWith(err error) {
-	g.directory.UnregisterService(g.info.ServiceId)
-	// TODO: close the remote connection
-	panic("not yet implemented")
-}
-
 func (g *ghostService) bg(errors chan error, terminate chan struct{}) {
-	func() {
+	go func() {
 		<-terminate
-		log.Printf("closing %s", g.info.Name)
 		g.listen.Close()
+		g.directory.UnregisterService(g.info.ServiceId)
 	}()
 	for {
 		stream, err := g.listen.Accept()
@@ -128,7 +119,7 @@ func (g *ghostService) bg(errors chan error, terminate chan struct{}) {
 }
 
 // newGhost registers a new service using info.Name into w.to.session.
-func newGhost(session bus.Session,
+func newGhost(directory services.ServiceDirectoryProxy,
 	info services.ServiceInfo) (*ghostService, error) {
 
 	addr := util.NewUnixAddr()
@@ -138,13 +129,6 @@ func newGhost(session bus.Session,
 		return nil, fmt.Errorf("open socket %s: %s", addr, err)
 	}
 
-	proxies := services.Services(session)
-	directory, err := proxies.ServiceDirectory()
-	if err != nil {
-		return nil, fmt.Errorf("ghost service: %s", err)
-	}
-
-	// TODO: clean-up info2 with machine id, process id, ...
 	info2 := services.ServiceInfo{
 		Name:      info.Name,
 		ServiceId: info.ServiceId,
@@ -172,8 +156,7 @@ func newGhost(session bus.Session,
 	}
 
 	g := &ghostService{
-		session:   session,
-		info:      info2,
+		info:      info,
 		listen:    listener,
 		directory: directory,
 	}
@@ -195,9 +178,16 @@ type watcher struct {
 // Watcher duplicates entry from one servvice directory to another
 func (w watcher) run(errors chan error, terminate chan struct{}) {
 
-	proxies := services.Services(w.from.session)
-	directory, err := proxies.ServiceDirectory()
-	unsubscribe, channel, err := directory.SubscribeServiceAdded()
+	proxies := services.Services(w.to.session)
+	directoryTo, err := proxies.ServiceDirectory()
+	if err != nil {
+		errors <- err
+		return
+	}
+
+	proxies = services.Services(w.from.session)
+	directoryFrom, err := proxies.ServiceDirectory()
+	unsubscribe, channel, err := directoryFrom.SubscribeServiceAdded()
 	if err != nil {
 		errors <- err
 		return
@@ -213,12 +203,18 @@ func (w watcher) run(errors chan error, terminate chan struct{}) {
 		if !ok {
 			break
 		}
-		info, err := directory.Service(added.Name)
+		info, err := directoryFrom.Service(added.Name)
 		if err != nil {
 			errors <- fmt.Errorf("%s added: %s", added.Name, err)
 			return
 		}
-		g, err := newGhost(w.to.session, info)
+		_, err = directoryTo.Service(info.Name)
+		if err == nil {
+			// already registered
+			continue
+		}
+
+		g, err := newGhost(directoryTo, info)
 		if err != nil {
 			errors <- fmt.Errorf("ghost %s: %s", added.Name, err)
 			return

@@ -22,8 +22,8 @@ func TestFireWall(t *testing.T) {
 	internalToken := "secret"
 
 	externalURL := util.NewUnixAddr()
-	externalUser := "public"
-	externalToken := "public"
+	externalUser := "secret" // FIXME
+	externalToken := "secret"
 
 	log.Printf("internal: %s", internalURL)
 	log.Printf("external: %s", externalURL)
@@ -65,12 +65,35 @@ func TestFireWall(t *testing.T) {
 		t.Error(err)
 	}
 
+	// external service
+	externalB := util.NewUnixAddr()
+	log.Printf("external B: %s", externalB)
+	externalServiceB, err := NewService(externalURL, externalB,
+		"B", externalUser, externalToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// test connection to B from inside
+	err = NewClient(externalURL, "B", externalUser, externalToken)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// test connection to B from inside
+	err = NewClient(internalURL, "B", internalUser, internalToken)
+	if err != nil {
+		t.Error(err)
+	}
+
 	select {
 	case err = <-internalDirectory.WaitTerminate():
 		t.Fatal(err)
 	case err = <-firewall.WaitTerminate():
 		t.Fatal(err)
 	case err = <-internalServiceA.WaitTerminate():
+		t.Fatal(err)
+	case err = <-externalServiceB.WaitTerminate():
 		t.Fatal(err)
 	default:
 	}
@@ -123,7 +146,7 @@ func NewClient(sessionURL, serviceName, user, token string) error {
 	// subscribe to the signal "pong" of the ping pong service.
 	cancel, pong, err := client.SubscribePong()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer cancel()
 
